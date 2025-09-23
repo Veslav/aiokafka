@@ -114,20 +114,20 @@ class FetchResult:
         if not self.check_assignment(tp) or not self.has_more():
             return None
 
-        msg = next(self._partition_records, None)
+        msg = anext(self._partition_records, None)
         # We should update position in any case
         self._update_position()
         if msg is None:
             self._partition_records = None
         return msg
 
-    def getall(self, max_records=None):
+    async def getall(self, max_records=None):
         tp = self._topic_partition
         if not self.check_assignment(tp) or not self.has_more():
             return []
 
         ret_list = []
-        for msg in self._partition_records:
+        async for msg in self._partition_records:
             ret_list.append(msg)
             if max_records is not None and len(ret_list) >= max_records:
                 self._update_position()
@@ -193,20 +193,22 @@ class PartitionRecords:
         # empty compacted batches, etc.
         self.next_fetch_offset = fetch_offset
 
-        self._records_iterator = self._unpack_records()
+        self._records_iterator = None
 
-    def __iter__(self):
+    def __aiter__(self):
+        if self._records_iterator is None:
+            self._records_iterator = self._unpack_records()
         return self
 
-    def __next__(self):
+    def __anext__(self):
         try:
-            return next(self._records_iterator)
+            return anext(self._records_iterator)
         except StopIteration:
             # Break reference cycle just in case
             self._records_iterator = None
             raise
 
-    def _unpack_records(self):
+    async def _unpack_records(self):
         # NOTE: if the batch is not compressed it's equal to 1 record in
         #       v0 and v1.
         tp = self._tp
@@ -259,7 +261,7 @@ class PartitionRecords:
                 if record.offset < self.next_fetch_offset:
                     # Probably just a compressed messageset, it's ok to skip.
                     continue
-                consumer_record = self._consumer_record(tp, record)
+                consumer_record = await self._consumer_record(tp, record)
                 self.next_fetch_offset = record.offset + 1
                 yield consumer_record
 
@@ -295,16 +297,22 @@ class PartitionRecords:
             ) from None
         return ControlRecord.parse(control_record.key) == ABORT_MARKER
 
-    def _consumer_record(self, tp, record):
+    async def _consumer_record(self, tp, record):
         key_size = len(record.key) if record.key is not None else -1
         value_size = len(record.value) if record.value is not None else -1
 
         if self._key_deserializer:
-            key = self._key_deserializer(record.key)
+            if asyncio.iscoroutinefunction(self._key_deserializer):
+                key = await self._key_deserializer(record.key)
+            else:
+                key = self._key_deserializer(record.key)
         else:
             key = record.key
         if self._value_deserializer:
-            value = self._value_deserializer(record.value)
+            if asyncio.iscoroutinefunction(self._value_deserializer):
+                value = await self._value_deserializer(record.value)
+            else:
+                value = self._value_deserializer(record.value)
         else:
             value = record.value
 
@@ -1135,7 +1143,7 @@ class Fetcher:
                     continue
                 res_or_error = self._records[tp]
                 if type(res_or_error) is FetchResult:
-                    records = res_or_error.getall(max_records)
+                    records = await res_or_error.getall(max_records)
                     if not res_or_error.has_more():
                         # We processed all messages - request new ones
                         del self._records[tp]
