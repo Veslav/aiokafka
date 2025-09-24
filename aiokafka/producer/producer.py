@@ -400,15 +400,21 @@ class AIOKafkaProducer:
         """Returns set of all known partitions for the topic."""
         return await self.client._wait_on_metadata(topic)
 
-    def _serialize(self, topic, key, value):
+    async def _serialize(self, topic, key, value):
         if self._key_serializer is None:
             serialized_key = key
         else:
-            serialized_key = self._key_serializer(key)
+            if asyncio.iscoroutinefunction(self._key_serializer):
+                serialized_key = await self._key_serializer(key)
+            else:
+                serialized_key = self._key_serializer(key)
         if self._value_serializer is None:
             serialized_value = value
         else:
-            serialized_value = self._value_serializer(value)
+            if asyncio.iscoroutinefunction(self._value_serializer):
+                serialized_value = await self._value_serializer(key)
+            else:
+                serialized_value = self._value_serializer(key)
 
         message_size = LegacyRecordBatchBuilder.record_overhead(self._producer_magic)
         if serialized_key is not None:
@@ -514,7 +520,7 @@ class AIOKafkaProducer:
             # Record parser/builder support only list type, no explicit None
             headers = []
 
-        key_bytes, value_bytes = self._serialize(topic, key, value)
+        key_bytes, value_bytes = await self._serialize(topic, key, value)
         partition = self._partition(
             topic, partition, key, value, key_bytes, value_bytes
         )
