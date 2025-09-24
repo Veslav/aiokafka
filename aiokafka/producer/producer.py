@@ -412,9 +412,9 @@ class AIOKafkaProducer:
             serialized_value = value
         else:
             if asyncio.iscoroutinefunction(self._value_serializer):
-                serialized_value = await self._value_serializer(key)
+                serialized_value = await self._value_serializer(value)
             else:
-                serialized_value = self._value_serializer(key)
+                serialized_value = self._value_serializer(value)
 
         message_size = LegacyRecordBatchBuilder.record_overhead(self._producer_magic)
         if serialized_key is not None:
